@@ -1102,6 +1102,25 @@ def reset_all_documents():
 
 if __name__ == '__main__':
     init_db()
+    
+    # Auto-load documents from data/ folder if ChromaDB is empty
+    if collection.count() == 0:
+        print("📂 ChromaDB is empty. Auto-loading documents from data/ folder...")
+        try:
+            import subprocess
+            result = subprocess.run(
+                [sys.executable, "fill_db.py"],
+                capture_output=True, text=True, timeout=300
+            )
+            print(result.stdout)
+            if result.returncode != 0:
+                print(f"⚠️ fill_db.py stderr: {result.stderr}")
+            # Reload collection after fill_db populates it
+            collection = chroma_client.get_or_create_collection(name="cookcounty_tax_faqs")
+            print(f"✅ Auto-loaded {collection.count()} document chunks into ChromaDB")
+        except Exception as e:
+            print(f"⚠️ Auto-load failed: {e}. You can upload documents manually at /documents")
+    
     port = int(os.environ.get("PORT", 5001))
     print(f"📚 Loaded {collection.count()} documents from ChromaDB")
     print(f"🚀 Starting RAG-First Legal Chatbot...")
