@@ -1102,7 +1102,8 @@ def reset_all_documents():
 
 if __name__ == '__main__':
     init_db()
+    port = int(os.environ.get("PORT", 5001))
     print(f"📚 Loaded {collection.count()} documents from ChromaDB")
     print(f"🚀 Starting RAG-First Legal Chatbot...")
-    print(f"🌐 Open http://localhost:5001 in your browser")
-    app.run(debug=False, host='0.0.0.0', port=5001)
+    print(f"🌐 Open http://localhost:{port} in your browser")
+    app.run(debug=False, host='0.0.0.0', port=port)
