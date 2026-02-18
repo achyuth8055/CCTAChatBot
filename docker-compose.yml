@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  rag-chatbot:
+    build: .
+    container_name: rag-legal-chatbot
+    ports:
+      - "5001:5001"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - KHATIBLAW_WEBSITE=${KHATIBLAW_WEBSITE:-https://www.khatiblaw.com}
+    volumes:
+      - ./data:/app/data
+      - ./chroma_db:/app/chroma_db
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
