@@ -61,6 +61,15 @@ with contextlib.redirect_stderr(_stderr_suppressor):
     )
     collection = chroma_client.get_or_create_collection(name="cookcounty_tax_faqs")
 
+def get_collection():
+    """Get a fresh collection reference (handles stale/invalid collection objects)."""
+    global collection
+    try:
+        collection.count()
+    except Exception:
+        collection = chroma_client.get_or_create_collection(name="cookcounty_tax_faqs")
+    return collection
+
 client = OpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
     base_url="https://api.deepseek.com" if os.getenv("DEEPSEEK_API_KEY") else "https://api.openai.com/v1"
@@ -249,7 +258,7 @@ def retrieve_with_quality_check(intent: str, user_query: str, ctx: RequestContex
         logger.info(f"[{ctx.request_id}] Intent: {intent}, Query: '{retrieval_query[:50]}...'")
         
         with contextlib.redirect_stderr(_stderr_suppressor):
-            results = collection.query(
+            results = get_collection().query(
                 query_texts=[retrieval_query],
                 n_results=5,
                 include=["documents", "distances"]
@@ -774,13 +783,13 @@ def handle_single_intent(intent: str, user_query: str, ctx: RequestContext, cont
 
 @app.route('/')
 def home():
-    doc_count = collection.count()
+    doc_count = get_collection().count()
     return render_template('index.html', doc_count=doc_count)
 
 
 @app.route('/documents')
 def documents():
-    doc_count = collection.count()
+    doc_count = get_collection().count()
     return render_template('documents.html', doc_count=doc_count)
 
 
@@ -816,11 +825,42 @@ def chat():
         }), 500
 
 
+@app.route('/api/calculate-savings', methods=['POST'])
+def calculate_savings():
+    """PIN-based property tax savings estimator (demo/prototype)."""
+    import random
+    import hashlib
+
+    data = request.get_json()
+    pin = (data.get('pin') or '').strip()
+
+    if not pin:
+        return jsonify({'error': 'Please enter a valid property PIN or address.'}), 400
+
+    # Generate deterministic but realistic-looking demo values from the PIN
+    seed = int(hashlib.md5(pin.encode()).hexdigest()[:8], 16)
+    rng = random.Random(seed)
+
+    current_assessment = rng.randint(180_000, 650_000)
+    reduction_pct = rng.uniform(0.10, 0.22)
+    estimated_fair_value = int(current_assessment * (1 - reduction_pct))
+    tax_rate = 0.0695  # approximate Cook County effective rate
+    potential_savings = int((current_assessment - estimated_fair_value) * tax_rate)
+
+    return jsonify({
+        'pin': pin,
+        'current_assessment': current_assessment,
+        'estimated_fair_value': estimated_fair_value,
+        'potential_savings': potential_savings,
+        'reduction_pct': round(reduction_pct * 100, 1)
+    })
+
+
 @app.route('/health')
 def health():
     return jsonify({
         'status': 'ok',
-        'documents': collection.count(),
+        'documents': get_collection().count(),
         'model': LLM_MODEL
     })
 
@@ -935,7 +975,7 @@ def upload_document(chatbot_id):
                     })
             
             with contextlib.redirect_stderr(_stderr_suppressor):
-                collection.upsert(documents=documents, ids=ids, metadatas=metadatas)
+                get_collection().upsert(documents=documents, ids=ids, metadatas=metadatas)
             
             doc.status = DocumentStatus.TRAINED
             doc.chunk_count = len(documents)
@@ -970,7 +1010,7 @@ def delete_document(doc_id):
         with contextlib.redirect_stderr(_stderr_suppressor):
             try:
                 ids_to_delete = [f"doc_{doc_id}_{i}" for i in range(doc.chunk_count or 100)]
-                collection.delete(ids=ids_to_delete)
+                get_collection().delete(ids=ids_to_delete)
             except Exception:
                 pass
         
@@ -1021,7 +1061,7 @@ def train_document(doc_id):
                     })
             
             with contextlib.redirect_stderr(_stderr_suppressor):
-                collection.upsert(documents=documents, ids=ids, metadatas=metadatas)
+                get_collection().upsert(documents=documents, ids=ids, metadatas=metadatas)
             
             doc = db.query(Document).filter(Document.id == doc_id).first()
             if doc:
@@ -1052,7 +1092,7 @@ def get_stats():
     try:
         total_docs = db.query(Document).count()
         trained_docs = db.query(Document).filter(Document.status == DocumentStatus.TRAINED).count()
-        total_embeddings = collection.count()
+        total_embeddings = get_collection().count()
         
         return jsonify({
             'total_documents': total_docs,
@@ -1079,12 +1119,12 @@ def reset_all_documents():
                     os.rmdir(parent_dir)
             db.delete(doc)
         
-        deleted_embeddings = collection.count()
+        deleted_embeddings = get_collection().count()
         
         with contextlib.redirect_stderr(_stderr_suppressor):
-            all_ids = collection.get()['ids']
+            all_ids = get_collection().get()['ids']
             if all_ids:
-                collection.delete(ids=all_ids)
+                get_collection().delete(ids=all_ids)
         
         db.commit()
         
@@ -1104,7 +1144,7 @@ if __name__ == '__main__':
     init_db()
     
     # Auto-load documents from data/ folder if ChromaDB is empty
-    if collection.count() == 0:
+    if get_collection().count() == 0:
         print("📂 ChromaDB is empty. Auto-loading documents from data/ folder...")
         try:
             import subprocess
@@ -1117,12 +1157,12 @@ if __name__ == '__main__':
                 print(f"⚠️ fill_db.py stderr: {result.stderr}")
             # Reload collection after fill_db populates it
             collection = chroma_client.get_or_create_collection(name="cookcounty_tax_faqs")
-            print(f"✅ Auto-loaded {collection.count()} document chunks into ChromaDB")
+            print(f"✅ Auto-loaded {get_collection().count()} document chunks into ChromaDB")
         except Exception as e:
             print(f"⚠️ Auto-load failed: {e}. You can upload documents manually at /documents")
     
     port = int(os.environ.get("PORT", 5001))
-    print(f"📚 Loaded {collection.count()} documents from ChromaDB")
+    print(f"📚 Loaded {get_collection().count()} documents from ChromaDB")
     print(f"🚀 Starting RAG-First Legal Chatbot...")
     print(f"🌐 Open http://localhost:{port} in your browser")
     app.run(debug=False, host='0.0.0.0', port=port)
